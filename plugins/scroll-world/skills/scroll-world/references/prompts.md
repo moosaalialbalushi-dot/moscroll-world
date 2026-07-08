@@ -13,6 +13,7 @@ Collect and write down:
 - `TONE` — a word or two (cozy/premium, playful, industrial…).
 - `STYLE` — the art direction (default below).
 - `SECTIONS[]` — ordered list; for each: `id`, `label`, `subject` (what's in the diorama), `eyebrow`, `title`, `body` (≤ 1 sentence), `tags[]` (0–3). Last section = hero product + CTA.
+- `MOBILE` — yes/no. **Always asked** (SKILL Step 1.5), presented to the user as **beta**. Gates the `-m.mp4` encodes (pipeline §6) + `clipMobile`/`connectorsMobile` wiring + the full mobile QA.
 
 ## Style preamble (default: clay diorama)
 
@@ -46,7 +47,47 @@ Tips:
 - For the final "hero product" section, drop the diorama-island framing and prompt a
   single oversized product centerpiece floating on the same background with a few small
   orbiting props.
+- **Compose for the centre.** The page renders every clip `object-fit:cover`, and a portrait
+  phone crops a 16:9 frame to roughly its centre half. Keep the focal subject horizontally
+  centred with a little headroom, and don't park anything essential at the far left/right
+  edges — it will be cut off on phones. This also keeps the dive's focal point (which the
+  camera flies toward) inside the mobile crop. For a scene that absolutely must show its full
+  width on mobile, generate a separate 9:16 variant for it.
 - Aspect `3:2`, `--resolution 2k --quality high`.
+
+## Leg prompt — architecture A, continuous forward take (Step 4)
+
+`--start-image = previous leg's ACTUAL last frame` (leg 0: the first scene's still).
+**No `--end-image`.** The bolded clauses are the motion-handoff contract — keep them
+verbatim; the mid-leg move is where the expression goes.
+
+```
+Single continuous cinematic camera move, no cuts. **Continue the same slow, steady
+forward glide.** [MID-LEG MOVE — optional, from the library below.] The camera moves
+into [SCENE i] toward [FOCAL POINT]. **In the final second, settle back into a slow,
+steady forward glide toward [the doorway / opening / direction of the next scene].**
+[STYLE tail + PALETTE]. Smooth, graceful, slow motion, subtle parallax. No text, no captions.
+```
+
+### Mid-leg move library (pick by concept; omit for a plain glide)
+
+Reversals are safe *inside* a leg (it's one continuous render) — only a seam may never
+reverse. That's why "ease back out" is fine mid-leg.
+
+- **Half-orbit** (product, luxury): "sweeping in a slow half-orbit around [the hero
+  object], keeping it centered, then continuing past it"
+- **Crane-up reveal** (scale, atriums, campuses): "rising smoothly as the full scale of
+  [the space] reveals below"
+- **Low lateral track** (production lines, counters, shelves): "tracking low and level
+  alongside [the line], foreground objects sliding past in parallax"
+- **Push-in + ease back** (craft, detail): "pushing in close to [the craft moment] until
+  it nearly fills the frame, then easing gently back out"
+- **Rise-and-swoop** (travel, outdoors): "climbing in a gentle arc over [the terrain],
+  then swooping down toward [the next focal point]"
+
+After rendering each leg, **check its last frame** before generating the next: it should
+read as a frame from a calm forward glide (no motion blur sideways, no half-finished
+orbit). If it doesn't, re-roll this leg — a bad handoff frame poisons every leg after it.
 
 ## Dive-in clip prompt (Step 4)
 
@@ -65,7 +106,10 @@ subtle parallax. No text, no captions.
 For scenes with no building to open (a field, a plaza, a road), replace the roof clause
 with "the camera flies low across [the scene] toward [focal point]."
 
-`--mode std --resolution 1080p --aspect_ratio 16:9 --duration 8`. No audio flag.
+Params by chain model (SKILL Step 4 table): seedance —
+`--mode std --resolution 1080p --aspect_ratio 16:9 --duration 8`, no audio flag;
+kling3_0 — `--mode std --sound off --aspect_ratio 16:9 --duration 10` (no `--resolution`
+param). Same for architecture-A legs.
 
 ## Connector clip prompt (Step 5)
 
@@ -84,7 +128,9 @@ For the last connector into a hero-product finale: "…glides forward and the wo
 dissolves toward a single giant [PRODUCT] floating in soft [BG] space, arriving in front
 of it."
 
-`--mode std --resolution 1080p --aspect_ratio 16:9 --duration 5`.
+seedance: `--mode std --resolution 1080p --aspect_ratio 16:9 --duration 5`; kling3_0:
+`--mode std --sound off --aspect_ratio 16:9 --duration 5`. Connectors need `--end-image`
+→ use a roster model that accepts it (Step 4).
 
 ## Copy per section (for the engine config)
 

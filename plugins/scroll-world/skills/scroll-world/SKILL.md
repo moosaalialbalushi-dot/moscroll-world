@@ -52,6 +52,9 @@ not the framework.
    scripts. Higgsfield generations take **3–8 min each** — always run them detached
    (background) and poll, never a foreground blocking call. Reference-by-job-UUID is
    rejected by media flags — pass **local file paths** to `--image/--start-image/--end-image`.
+   Video models differ in accepted params (e.g. Kling has no `--resolution`) and in whether
+   they support start/end-image conditioning at all — before batching, confirm the chosen
+   model's schema with `higgsfield model get <job_type>` and see the Step 4 model table.
 
 ---
 
@@ -85,6 +88,26 @@ default. Cover:
    the hero product. Each section needs: a short subject description (what's IN the
    diorama), an eyebrow, a headline, one line of body, and 0–3 tag pills. The last
    section is usually the hero product + the CTA.
+5. **Mobile version (beta) — ALWAYS ask this; never silently generate both.** Use
+   `AskUserQuestion`: *"Want a mobile-optimized version too? Mobile support is in
+   **beta** — the scroll-scrub mechanic is desktop-native; on phones you get lighter
+   encodes and engine hardening, but portrait crops the 16:9 frame and low-end devices
+   may still stutter."* Options: "Desktop only" / "Desktop + mobile (beta)". The beta
+   disclaimer must be stated to the user, not just implied. What the answer gates:
+   - **Yes** → produce the `-m.mp4` mobile encodes (Step 6) and wire
+     `clipMobile`/`connectorsMobile` (Step 7); run the full mobile QA (Step 8). If any
+     scene's focal subject sits off-centre, offer the 9:16 hero-variant escape hatch
+     (extra Higgsfield credits — say so).
+   - **No** → skip the mobile encodes and wiring entirely. The engine's phone hardening
+     (seek-coalescing, iOS priming, safe-area CSS) is always on regardless — that's not
+     a "mobile version," it's just the page not breaking when a phone visits — so a
+     desktop-only build still degrades gracefully.
+
+Video model is **not** an interview question — default `seedance_2_0` silently. If the user
+names a preference, honor it **only if it can frame-lock seams** (Step 4 roster:
+`seedance_2_0`, `kling3_0`, `seedance_2_0_mini`). This skill only ships seamless output, so
+a model that can't frame-lock is declined with a one-line why, not substituted in — use a
+roster model instead.
 
 Keep the scroll mechanic fixed (continuous fly-through) — that's the point of the skill.
 See `references/prompts.md` for the intake checklist and copy structure.
@@ -96,7 +119,8 @@ See `references/prompts.md` for the intake checklist and copy structure.
 One image per section, **all sharing the same style preamble** for cohesion. Default
 model **`gpt_image_2`** (crisp, great at isometric illustration; returns a solid/white
 background which is perfect for floating diorama "islands"). Use `nano_banana_2` only if
-the brief is character/cartoon-heavy.
+the brief is character/cartoon-heavy (note: `nano_banana_2` is a CLI alias — it resolves
+to `nano_banana_pro`; it won't appear under that name in `higgsfield model list`).
 
 Prompt shape (full templates in `references/prompts.md`):
 
@@ -136,13 +160,49 @@ These stills double as **video posters and lazy-load fallbacks**, so keep them.
 How the camera moves *between* scenes is the single biggest quality lever. Two shapes;
 pick by aesthetic.
 
+### Video model — pick ONE for the whole chain
+
+**This skill only ships seamless output**, so the only usable models are ones that can
+frame-lock a seam: every chained clip must accept `--start-image`, and connectors also
+need `--end-image`. That capability — not preference — is the selection rule. Check any
+model with `higgsfield model get <job_type>` and **skip anything whose media inputs are
+reference-only** (no start/end image): it can only *condition* a generation, not
+*continue* a shot, so it physically can't hold a seam. Schemas below were confirmed
+against the CLI:
+
+| Model | start/end image | Notes |
+|---|---|---|
+| `seedance_2_0` (default) | ✓ / ✓ | Full chain (legs + connectors). `--mode std --resolution 1080p`. Its NSFW filter is the touchy one (see Gotchas). |
+| `kling3_0` | ✓ / ✓ | Full chain — tested: `--mode std --sound off --duration 5` with start+end images accepted, seams frame-lock cleanly. **No `--resolution` param** (don't pass one; `--mode std` returns **720p native** — encode what ffprobe reports, never upscale). Sound defaults **on** → `--sound off`. `--duration` default 5, try 10 for legs. Different content filter than Seedance — the sanctioned NSFW fallback. |
+| `seedance_2_0_mini` | ✓ / ✓ | Cheap draft tier that keeps frame-locking (720p). The previz tier: run the whole chain here first, then re-render final legs on the full model — still seamless, so it translates directly. |
+
+Those three are the roster — all do both architectures. (`kling3_0_turbo` also frame-locks
+via `--start-image`, but has no `--end-image`, so it's architecture-A-only and can't make
+connectors; it also takes a different flag set — no `--mode`, has `--resolution` — so it
+doesn't drop into the pipeline as-is. It's not in the default roster; only reach for it, and
+wire it by hand, if architecture A's sequential render time is a proven bottleneck and you've
+benchmarked it as actually faster.)
+
+Rules:
+- **One model for all chained clips.** Each renderer has its own motion/color/grain
+  character; mixing models mid-chain keeps *position* continuity (frames still hand off)
+  but the render-character shift reads as a subtle pop. The one sanctioned exception is
+  the NSFW fallback for a single stubborn clip (Gotchas) — a slight character shift on
+  one 5s connector beats a missing connector.
+- Default to `seedance_2_0`; honor a user's stated preference **only if the model
+  qualifies** (frame-locking). If it doesn't, say so and use a supported model — never
+  ship a non-seamless build to satisfy a model request.
+- The pipeline scripts take the model as `$VMODEL` with per-model flags already cased
+  out (`references/pipeline.md`).
+
 ### A) Continuous forward take — RECOMMENDED for grounded / realistic / walkthrough
 One camera that only ever glides **forward**, first scene through last, as a single take.
 Generate the legs **sequentially**: leg 0 from scene-0's still (glide forward into it);
 then each leg's `--start-image` = the **previous leg's ACTUAL last frame** (extract with
-ffmpeg), prompt *"continue gliding smoothly FORWARD into [scene i], never pulling back"*,
-and **no `--end-image`** — an end-image of a wide establishing shot forces the camera to
-pull back, which is the #1 cause of stutter. Extract each leg's last frame to feed the
+ffmpeg), prompt *"continue gliding smoothly FORWARD into [scene i], never pulling back"*
+(or an expressive mid-leg move under the motion-handoff contract — see **Camera grammar**
+below), and **no `--end-image`** — an end-image of a wide establishing shot forces the
+camera to pull back, which is the #1 cause of stutter. Extract each leg's last frame to feed the
 next. Result: every seam is frame-identical **and** the camera never reverses. There are
 **no connectors** (skip Step 5) — the legs ARE the journey. Wire each leg as a section
 clip with `connectors: []` and a small `crossfade` (~0.08). Even without an `--end-image`
@@ -157,8 +217,54 @@ next scene (Step 5). The pull-out **reverses camera direction at every seam** (f
 to the map, fly to the next island"; in a grounded first-person walkthrough it reads as a
 jarring **rewind/stutter**. Use B only for the map-like aesthetic. When in doubt, use A.
 
+### Camera grammar — the move should fit the concept (A is NOT "forward only")
+
+"Forward only" is the *seam* rule, not the *leg* rule. The physics of the chain:
+
+- **Position continuity** at a seam comes from the frame handoff (next leg starts from the
+  previous leg's actual last frame).
+- **Velocity continuity** at a seam means the camera must never *reverse across a seam* —
+  that's the rewind stutter.
+- **Inside a single leg the camera is free.** One leg is one continuous render — there is
+  no seam to break mid-leg, so orbits, crane-ups, lateral tracking, even a push-in that
+  eases back out are all safe *within* the clip. Reversals are only fatal *across* seams.
+
+So give each leg an expressive move chosen from the scene's own logic, under a **motion
+handoff contract**: every leg **ends by settling into a slow, steady forward drift** toward
+the next destination (final ~1 s), and every leg **begins by continuing that same drift**.
+Keep both clauses in the prompts verbatim (templates in `references/prompts.md`).
+
+Pick the grammar from the concept:
+
+| Concept / tone | Mid-leg move |
+|---|---|
+| Product / luxury retail | slow half-orbit around the hero object, then continue past it |
+| Real estate / hospitality | steadicam glide through doorways; gentle crane-up in atria |
+| Industrial / process / logistics | low lateral track alongside the line, foreground parallax |
+| Travel / outdoors / campus | drone-style rise-and-reveal, then a descending swoop |
+| Food / craft / detail-driven | push in close to the craft moment, ease back, carry on |
+| Playful miniature (arch. B) | dives + aerial hops — the connector IS the grammar |
+
+Honest costs: expressive mid-leg moves raise re-roll odds — the model can end a fancy move
+in a state that isn't a clean forward drift. Mitigations: keep the final-second settle
+clause verbatim; **eyeball each leg's last frame before chaining the next** (it should look
+like a frame from a gentle forward glide — if not, re-roll before wasting the next leg);
+budget ~1 extra re-roll per expressive leg. A plain forward glide stays the zero-risk
+default — use it for legs where the scene itself is the show.
+
+Two related pacing knobs live in the engine (Step 7): per-section `scroll` (more scroll
+distance = longer dwell in that scene) and `linger` (the camera settles mid-scene exactly
+while the copy peaks, then picks up speed toward the seam). Prefer expressive motion in the
+*clip* and restraint in the *scrub mapping* — they compound.
+
+And remember scroll is a scrubber: visitors can scroll **up**, so every move also plays in
+reverse. That's free and expected — no extra work — but it's another reason seam velocity
+must be consistent in both directions (a seam that reads fine forward reads as a stutter
+backward too if velocity flips).
+
 **For B**, one camera flight per scene: starts high/outside, descends into the interior,
-structure opens. Model **`seedance_2_0`** (image-to-video), `--start-image = the scene still`.
+structure opens. Model: the chain model you picked above (default **`seedance_2_0`**),
+`--start-image = the scene still`.
 
 - Use the **solid-background still** (not the knocked-out transparent one) as the
   start image, so the video has a full frame.
@@ -166,8 +272,10 @@ structure opens. Model **`seedance_2_0`** (image-to-video), `--start-image = the
   at the whole <scene> from outside … descend and fly inside toward <focal point> … the
   roof/walls gently open to reveal the interior. <style>, smooth graceful slow motion.
   No text." (Template in `references/prompts.md`.)
-- Params: `--mode std --resolution 1080p --aspect_ratio 16:9 --duration 8`. Do **not**
-  pass `--generate-audio` (it errors on seedance; audio is wasted anyway — you'll mute).
+- Params (seedance): `--mode std --resolution 1080p --aspect_ratio 16:9 --duration 8`.
+  For Kling: drop `--resolution` (no such param), add `--sound off`, `--duration 10`.
+  Do **not** pass `--generate-audio` (it errors on seedance; audio is wasted anyway —
+  you'll mute).
 - Run concurrently, detached, then download each `.result_url`. Re-roll individual
   failures. Keep the raw 1080p sources — you need their frames next.
 
@@ -205,13 +313,16 @@ ffmpeg -sseof -0.15 -i dive_i.mp4   -frames:v 1 -q:v 2 dive_i_last.png    # inte
 ffmpeg -ss 0      -i dive_{i+1}.mp4 -frames:v 1 -q:v 2 dive_next_first.png # establishing of i+1
 ```
 
-Generate the connector (`--duration 5` is plenty):
+Generate the connector (`--duration 5` is plenty). Connectors need `--end-image`, so the
+model must accept it — any roster model does (`seedance_2_0`, `seedance_2_0_mini`,
+`kling3_0`):
 
 ```bash
-higgsfield generate create seedance_2_0 \
+higgsfield generate create "$VMODEL" \
   --prompt "$(cat connector_i.txt)" \
   --start-image dive_i_last.png --end-image dive_next_first.png \
-  --mode std --resolution 1080p --aspect_ratio 16:9 --duration 5 --wait --json
+  $VOPTS --aspect_ratio 16:9 --duration 5 --wait --json
+# seedance: VOPTS="--mode std --resolution 1080p"; kling3_0: VOPTS="--mode std --sound off"
 ```
 
 Connector prompt: "Single continuous camera move, no cuts. Pull up and back out of
@@ -251,6 +362,16 @@ ffmpeg -i src.mp4 -an -vf "unsharp=5:5:0.8:5:5:0.0" \
 
 Encode all 2N-1 clips (dives + connectors) with the same settings for uniform quality.
 
+**Mobile encodes (beta — only if the user opted in at Step 1.5).** Phone video decoders seek
+far slower than a laptop's, and seek cost scales with GOP length, so the 1080p `-g 8` master
+that scrubs smoothly on desktop can stutter on a phone. Produce a lighter `-m.mp4` sibling for
+every clip — **720p, `-g 4`** (more keyframes = cheaper seeks), crf 23 — and wire them as
+`clipMobile` / `connectorsMobile` (Step 7). The engine serves them automatically on phones and
+falls back to the desktop clip when absent. The exact `encm()` script is in
+`references/pipeline.md` §6. If the user chose desktop-only, skip this — the engine still
+hardens phone scrubbing regardless (seek-coalescing, iOS priming), so the page degrades
+gracefully rather than breaking.
+
 ---
 
 ## Step 7 — Assemble the page
@@ -264,21 +385,38 @@ mountScrollWorld(document.getElementById('world'), {
   brand: { name: 'Pearl & Co.' },
   diveScroll: 1.3, connScroll: 0.9,          // viewport-heights of scroll per clip
   sections: [
-    { id:'farm', label:'The Farms', still:'assets/farm.webp', clip:'assets/vid/farm.mp4',
+    { id:'farm', label:'The Farms', still:'assets/farm.webp',
+      clip:'assets/vid/farm.mp4', clipMobile:'assets/vid/farm-m.mp4',   // mobile beta only
+      scroll: 1.6, linger: 0.45,   // optional pacing: longer dwell + camera settles mid-scene
       accent:'#8FB98A', eyebrow:'From leaf to last sip', title:'It starts in the hills.',
       body:'…', tags:['Single-origin','Hand-picked'] },
     // …one per section; last may carry a `cta`
   ],
-  connectors: ['assets/vid/conn1.mp4','assets/vid/conn2.mp4', /* … length = sections-1 */],
+  connectors:       ['assets/vid/conn1.mp4','assets/vid/conn2.mp4',   /* … length = sections-1 */],
+  connectorsMobile: ['assets/vid/conn1-m.mp4','assets/vid/conn2-m.mp4' /* … same length; mobile beta only */],
 });
 ```
 
 The engine handles: the ordered dive/connector chain, scroll→currentTime with rAF
 smoothing, blob loading, lazy prefetch of nearby clips, frame-matched crossfades, pinned
 per-section copy (first section greets on landing, last holds its CTA), a route rail,
-`prefers-reduced-motion`, and mobile. Theme it with CSS variables (`--accent`,
+`prefers-reduced-motion`, and mobile. **Pacing per section:** `scroll` overrides
+`diveScroll` for that scene (more scroll = longer dwell) and `linger` (0–1, keep ≤ 0.6)
+remaps time so the camera settles mid-scene — exactly while the copy peaks — then speeds
+up toward the seam; seam frames are untouched (f(0)=0, f(1)=1). Give the hero and finale
+scenes a higher `scroll` + some `linger`; keep transit scenes brisk. Theme it with CSS variables (`--accent`,
 `--sw-bg`, `--sw-ink`, …) — the visual identity comes from the generated clips, so the
 chrome stays quiet. See the header of `scrub-engine.js` for the full config + CSS vars.
+
+**On phones the engine adapts automatically** (coarse pointer or ≤860px): it serves
+`clipMobile` / `connectorsMobile` when present, **coalesces seeks** (never queues a new
+`currentTime` while the decoder is still seeking — this is what stops a fast flick from
+freezing the clip), **keeps the still as a poster until the clip paints its first frame**
+and **primes each video on first touch** (fixes iOS's blank-until-played video), drops the
+drifting particles, ignores URL-bar-only resizes (no scroll jump), and uses safe-area
+insets so copy clears the notch/home indicator. All of this hardening is on by default —
+no config needed. The `clipMobile`/`connectorsMobile` encodes are the opt-in **mobile
+beta** part (Step 1.5): only wire them when the user asked for the mobile version.
 
 For non-JS backends (Python/Rails/etc.): serve the assets and drop the engine `<script>`
 into the rendered HTML; nothing about it is framework-specific.
@@ -296,7 +434,23 @@ is the thing most likely to be wrong:
   the crossfade band is too short.
 - Check the console for errors, confirm `video.seekable.end(0) > 0` (blob working), and
   that `currentTime` tracks scroll across each clip's band.
-- Check mobile (full-bleed `cover`) and reduced-motion (should fall back to the stills).
+- **Mobile — full checklist only if the user opted into the mobile beta (Step 1.5).**
+  For a desktop-only build, just sanity-check a phone viewport once: page loads, still
+  posters show, nothing overlaps — the engine's hardening covers graceful degradation.
+  For the beta (do this on a real phone or an emulated one, portrait + landscape):
+  - Emulate a phone viewport **with CPU throttled 4–6×** and scroll fast — the clip should
+    track without freezing (the seek-coalescing + `-m.mp4` encodes are what make this hold).
+  - Confirm the first scene shows immediately (its still is the poster) and the video takes
+    over the instant you scroll — no blank/black scene (the iOS priming fix). Test iOS Safari
+    specifically; it's the one that goes blank if this regresses.
+  - Verify the `-m.mp4` variant is actually served on mobile (Network panel), and the
+    heavy 1080p master on desktop.
+  - Slowly scroll so the URL bar collapses — the page must **not jump** (height-only resizes
+    are ignored on touch). Rotate the device — layout should recompose cleanly.
+  - Portrait crops a 16:9 clip to its centre; confirm the focal subject still reads. If a
+    hero scene's subject sits off-centre and gets cut, recompose it (prompts.md) or generate
+    a 9:16 variant for that scene.
+- Check reduced-motion (should fall back to the stills, no video, no particles).
 
 ---
 
@@ -323,16 +477,45 @@ is the thing most likely to be wrong:
   trigger words like "bed", "pool", "waterfall", "wine", "swim". It's partly the prompt
   wording and partly the reference frames. Fixes, in order: (1) re-roll — it's often
   non-deterministic and passes on the 2nd–3rd try; (2) strip trigger words and add
-  "empty, unoccupied, no people, no figures, architectural, tasteful"; (3) if a connector
-  still won't pass, set that connector slot to `null` — the engine crossfades that seam
-  directly (optional connectors), so the page still completes. Budget extra credits/time
-  for these re-rolls on interiors/real-estate content.
+  "empty, unoccupied, no people, no figures, architectural, tasteful"; (3) regenerate
+  just that clip on **`kling3_0`** with the same start/end frames — a different
+  provider's filter often passes what Seedance blocks. Expect a slight render-character
+  shift on that one clip (each model has its own grain/motion feel); for a 5s connector
+  behind a crossfade that usually beats option (4): set the connector slot to `null` —
+  the engine crossfades that seam directly (optional connectors), so the page still
+  completes. Budget extra credits/time for these re-rolls on interiors/real-estate content.
 - **Dark / custom theme** → the engine wraps its default tokens in `@layer sw`, so a
   page-level `:root` / `.sw-root { --sw-bg; --sw-ink; --sw-accent; --sw-font-* }` block
   wins cleanly (no specificity hacks). `--sw-ink` is your primary **text/heading** colour;
   the **accent** fills the primary button and active nav. For a dark theme, set `--sw-bg`
   dark and `--sw-ink` light — the copy scrim and title shadow follow `--sw-bg` automatically.
+- **Phone scrub stutters / freezes on a fast flick** → the 1080p master is too heavy for a
+  phone decoder and seeks pile up. Ship the `-m.mp4` mobile encodes (720p, `-g 4`) and wire
+  `clipMobile`/`connectorsMobile` (Step 6/7). The engine already coalesces seeks; the lighter
+  encode is the other half. Still choppy on a low-end device? Tighten GOP (`-g 2` / all-intra).
+- **Blank / black scene on iOS (desktop was fine)** → an iOS Safari quirk: a muted video that
+  was never played won't paint a seeked frame. The engine fixes this by keeping the still as a
+  poster until the clip paints and priming each video on first touch — so **don't** hide the
+  still on `loadedmetadata` or strip the `playsinline`/`muted` attributes if you adapt the
+  engine into a framework.
+- **Page jumps while scrolling on mobile** → something is re-running layout on the URL-bar
+  show/hide `resize`. The engine ignores height-only resizes on touch; if you ported it, gate
+  your resize handler on a width change (keep the `orientationchange` path for rotation).
+- **Copy hidden behind the URL bar / notch on mobile** → use the engine's safe-area-aware
+  bottom offset (`env(safe-area-inset-bottom)` + `dvh`); make sure the page's
+  `<meta viewport>` includes `viewport-fit=cover` (the template does).
+- **Portrait crops the scene** → a 16:9 clip on a tall phone shows only its centre. Keep each
+  scene's focal subject centred with a little headroom (prompts.md), or generate a 9:16 hero
+  for the scenes that matter most. The engine centre-crops (`object-fit:cover`); it can't
+  un-crop a widescreen composition.
 - **`--generate-audio` errors on seedance** → omit it; mute in HTML and `-an` on encode.
+- **Kling rejects your flags** → `kling3_0` has **no `--resolution` param** (don't pass
+  one; encode at whatever native res ffprobe reports) and **sound defaults on** — pass
+  `--sound off`. Duration default is 5; legs/dives want 10.
+- **Seam pop only where you "saved credits"** → you swapped models mid-chain, or used a
+  start-image-only model where a connector needs an `--end-image`. One model for the whole
+  chain; the only cheap tier is `seedance_2_0_mini`, which keeps frame-locking so it stays
+  seamless. (Any model with reference-only inputs can't hold a seam at all — Step 4.)
 - **White-box scenes** → `gpt_image_2` returns a solid bg; either match the page bg to it
   or knock it out (Step 3).
 - **bash 3.2** on macOS → no associative arrays in scripts.
@@ -342,8 +525,9 @@ is the thing most likely to be wrong:
 - `references/prompts.md` — the intake checklist, style-preamble pattern, and every
   prompt template (scene still, dive, connector) with fill-in slots.
 - `references/pipeline.md` — copy-paste batch scripts for the whole run (generate →
-  extract frames → connectors → encode), bash-3.2-safe.
+  extract frames → connectors → encode → mobile encode), bash-3.2-safe.
 - `references/scrub-engine.js` — the portable, config-driven scrub engine (builds DOM +
-  injects CSS; blob-seek, lazy load, seam crossfade, copy, route rail, reduced-motion).
+  injects CSS; blob-seek, lazy load, seam crossfade, copy, route rail, reduced-motion, and
+  phone hardening: mobile encodes, seek-coalescing, iOS priming, safe-area, no-jump resize).
 - `references/index-template.html` — a minimal standalone page that mounts the engine.
 - `references/knockout.py` — border-connected background knockout for floating scenes.
