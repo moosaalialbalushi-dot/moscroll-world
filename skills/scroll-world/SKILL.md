@@ -15,6 +15,12 @@ allowed-tools: Bash, Read, Write, Edit, AskUserQuestion, Skill
 
 # scroll-world
 
+> **Free stills override (this fork):** scene stills can be generated for free —
+> FLUX.1-schnell (~5 s) or the local SD Forge (private, slow) — instead of
+> Higgsfield/Codex. See `references/free-providers.md` + `references/gen_still.py`.
+> Offer these at Step 1.6 alongside (or instead of) the paid sources; the video
+> chain is unchanged and still requires Higgsfield credits.
+
 Produces a landing page where **scroll drives a camera**: it dives from outside a scene
 into its interior, then flies out and into the next scene, continuously, with no visible
 cuts. The visuals are AI-generated (Higgsfield); the page just scrubs pre-rendered video
